@@ -453,8 +453,12 @@
     return (e.getAttribute(`data-block-type`) || ``) === `table` || !!e.querySelector(`table`);
   }
   function g(e) {
-    let t = e.querySelector(`table`) || e,
+    let tbl = e.querySelector(`table`),
+      t = tbl || e,
       n = Array.from(t.querySelectorAll(`tr`));
+    // 调试日志: 记录表格解析详情
+    let bid = e.getAttribute(`data-block-id`) || e.getAttribute(`data-record-id`) || ``;
+    console.log(`[feishu-export] g() table id=${bid} hasTable=${!!tbl} trCount=${n.length} cloneTextLen=${(e.textContent||``).length}`);
     if (n.length === 0) return { type: `table`, headers: [], rows: [] };
     let r = n[0];
     return {
