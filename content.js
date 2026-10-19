@@ -257,37 +257,40 @@
       Array.from(t.values())
     );
   }
+  // 在正文根容器 e 内收集 block, 限定范围避免侧边栏/评论混入
+  // 同时收集 data-record-id 和 data-block-id, 不提前返回
+  // 用 DOM 元素 Set 去重, 避免同一元素被两种属性重复收集
   function n(e, t) {
-    let n = document.querySelectorAll(`[data-record-id]`);
-    if (n.length > 0) {
-      let r = !1;
-      for (let e of Array.from(n)) {
-        if (e.closest(`table`)) continue;
-        // 跳过嵌套 block: 祖先也有 data-record-id 或 data-block-id
-        // 嵌套 block 通过 processContainer 递归处理, 避免双重输出
-        if (e.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
-        let n = e.getAttribute(`data-record-id`);
-        t.has(n) || (t.set(n, e.cloneNode(!0)), (r = !0));
-      }
-      if (r) return;
+    let seen = new Set();
+    // 收集 data-record-id (多维表格记录)
+    for (let el of Array.from(e.querySelectorAll(`[data-record-id]`))) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      if (el.closest(`table`)) continue;
+      // 跳过嵌套 block: 祖先也有 data-block-id 或 data-record-id
+      // 嵌套 block 通过 processContainer 递归处理, 避免双重输出
+      if (el.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
+      let id = el.getAttribute(`data-record-id`);
+      t.has(id) || t.set(id, el.cloneNode(!0));
     }
-    let i = document.querySelectorAll(`[data-block-id]`);
-    if (i.length > 0) {
-      let r = !1;
-      for (let e of Array.from(i)) {
-        if (e.closest(`table`) && e.getAttribute(`data-block-type`) !== `table`) continue;
-        // 跳过嵌套 block: 祖先也有 data-block-id 或 data-record-id
-        // 嵌套 block 通过 processContainer 递归处理, 避免双重输出
-        if (e.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
-        let n = e.getAttribute(`data-block-id`);
-        t.has(n) || (t.set(n, e.cloneNode(!0)), (r = !0));
-      }
-      if (r) return;
+    // 收集 data-block-id (普通文档块), 不提前返回
+    for (let el of Array.from(e.querySelectorAll(`[data-block-id]`))) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      if (el.closest(`table`) && el.getAttribute(`data-block-type`) !== `table`) continue;
+      // 跳过嵌套 block: 祖先也有 data-block-id 或 data-record-id
+      // 嵌套 block 通过 processContainer 递归处理, 避免双重输出
+      if (el.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
+      let id = el.getAttribute(`data-block-id`);
+      t.has(id) || t.set(id, el.cloneNode(!0));
     }
-    let a = e.querySelectorAll(`:scope > div, :scope > p, :scope > section`);
-    for (let e of Array.from(a)) {
-      let n = `child_${t.size}`;
-      !t.has(n) && e.textContent?.trim() && t.set(n, e.cloneNode(!0));
+    // fallback: 无任何 block 标记时, 收集直接子元素
+    if (t.size === 0) {
+      let children = e.querySelectorAll(`:scope > div, :scope > p, :scope > section`);
+      for (let el of Array.from(children)) {
+        let id = `child_${t.size}`;
+        !t.has(id) && el.textContent?.trim() && t.set(id, el.cloneNode(!0));
+      }
     }
   }
   function r() {
@@ -466,6 +469,10 @@
       e.classList.contains(`docx-todo-block`)
     );
   }
+  // 解析列表项, 递归构建子列表, 不再展平成一行
+  // 1. 克隆 e, 移除子列表项 block, 用 a() 收集直接文本
+  // 2. 递归处理直接子列表项 block, 生成 subList
+  // background.js 的 convertList 已支持 subList 字段递归渲染缩进
   function v(e, t) {
     let n = t || e.getAttribute(`data-block-type`) || ``,
       r = `unordered`;
@@ -473,11 +480,39 @@
       ? (r = `ordered`)
       : (n === `todo` || e.classList.contains(`docx-todo-block`)) && (r = `todo`);
     let i = r === `todo` ? y(e) : void 0;
-    return {
-      type: `list`,
-      style: r,
-      items: [{ children: a(e), ...(i === void 0 ? {} : { checked: i }) }]
-    };
+    // 提取直接文本: 克隆后移除子列表项 block, 避免子内容被合并到父项
+    let childListSel = `[data-block-type="bullet"], [data-block-type="ordered"], [data-block-type="todo"], .docx-bullet-block, .docx-ordered-block, .docx-todo-block`;
+    let cloned = e.cloneNode(true);
+    for (let child of cloned.querySelectorAll(childListSel)) {
+      child.remove();
+    }
+    let mainContent = a(cloned);
+    let item = { children: mainContent, ...(i === void 0 ? {} : { checked: i }) };
+    // 递归处理直接子列表项 (从 child.parentElement 向上找, 遇到 e 之前不能有其他列表项)
+    let childListBlocks = Array.from(e.querySelectorAll(childListSel)).filter((child) => {
+      let p = child.parentElement;
+      while (p && p !== e) {
+        let bt = p.getAttribute && p.getAttribute(`data-block-type`);
+        if (bt === `bullet` || bt === `ordered` || bt === `todo`) return false;
+        p = p.parentElement;
+      }
+      return true;
+    });
+    if (childListBlocks.length > 0) {
+      // 合并连续同类型子列表项为一个 list
+      let subList = null;
+      for (let child of childListBlocks) {
+        let childType = child.getAttribute(`data-block-type`) || ``;
+        let childList = v(child, childType);
+        if (subList && subList.style === childList.style) {
+          subList.items.push(...childList.items);
+        } else if (!subList) {
+          subList = childList;
+        }
+      }
+      if (subList) item.subList = subList;
+    }
+    return { type: `list`, style: r, items: [item] };
   }
   function y(e) {
     let t = e.querySelector(`input[type="checkbox"]`);
@@ -707,8 +742,9 @@
     }
     return { type: `document`, title: R(e), children: t };
   }
-  // 递归展开 container, 用 Set 去重
-  // n 函数可能同时收集了容器和内部 block, 展开后去重消除重复
+  // 递归展开 container, 用 blockId 去重
+  // 优先用 blockId (不同位置相同内容的段落不会被误删)
+  // 无 blockId 时 fallback 到 JSON.stringify
   function expandContainer(e, seen) {
     if (e.type === `container`) {
       let result = [];
@@ -717,20 +753,26 @@
       }
       return result;
     }
-    let k = JSON.stringify(e);
+    let k = e.blockId || JSON.stringify(e);
     if (seen.has(k)) return [];
     seen.add(k);
     return [e];
   }
+  // 给解析结果附加 blockId, 用于精确去重
+  function withBlockId(node, blockId) {
+    if (node && blockId) node.blockId = blockId;
+    return node;
+  }
   function L(e) {
     let t = e.getAttribute(`data-block-type`) || ``;
+    let blockId = e.getAttribute(`data-block-id`) || e.getAttribute(`data-record-id`) || ``;
     // 空文本且无任何内容元素: 跳过
     if (!e.textContent?.trim() && !e.querySelector(`img, iframe, hr, table`)) return null;
     // 目录块: 跳过
     if (isCatalog(e)) return null;
     // page/grid/grid_column: 当作容器递归处理子 block (不再返回 null 丢失内容)
     if (t === `page` || t === `grid` || t === `grid_column` || e.classList.contains(`docx-block-zero-space`))
-      return processContainer(e);
+      return withBlockId(processContainer(e), blockId);
     // 容器检测: 包含多个子 block 且不是已知的内容块类型 -> 递归处理
     // 放在 u(e) 之前, 避免超大容器因内部有 <h1> 被误判为 heading
     if (
@@ -754,9 +796,9 @@
       !e.classList.contains(`docx-todo-block`)
     ) {
       let subBlocks = e.querySelectorAll(`[data-block-id]`);
-      if (subBlocks.length > 1) return processContainer(e);
+      if (subBlocks.length > 1) return withBlockId(processContainer(e), blockId);
     }
-    return t.startsWith(`heading`)
+    let result = t.startsWith(`heading`)
       ? d(e, t)
       : t === `code`
         ? m(e)
@@ -802,6 +844,7 @@
                                           : _(e, ``)
                                             ? v(e, ``)
                                             : f(e);
+    return withBlockId(result, blockId);
   }
   function R(e) {
     for (let t of e)

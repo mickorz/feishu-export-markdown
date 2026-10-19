@@ -335,33 +335,65 @@ let r = (e.textContent || ``).replace(/[\u200B-\u200D\uFEFF\u00A0]/g, ``);
 if (e.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
 ```
 
-### 8.2 部分解决仍有残留的问题
+#### 问题 7: JSON.stringify 去重误删相同内容段落 (P0-1 已修复)
 
-#### 问题 7: 列表项子内容被合并到一行
+**现象**: 文档中两个不同位置、内容相同的段落(如不同章节下都有"需要记录日志"), 第二个被错误删除.
 
-**现象**: 飞书的列表项内嵌套了子列表项, 子列表项被合并到父列表项的一行里, 同时又被独立输出.
+**根因**: `expandContainer` 用 `JSON.stringify(e)` 作为去重 key, 内容相同的节点会被视为重复. 这在内容去重场景下过于激进, 误删了语义上独立的段落.
+
+**修复**: `L` 函数解析时附加 `blockId`(`data-block-id` 或 `data-record-id`), `expandContainer` 优先用 `blockId` 去重, 无 `blockId` 时才 fallback 到 `JSON.stringify`.
+
+```javascript
+function withBlockId(node, blockId) {
+  if (node && blockId) node.blockId = blockId;
+  return node;
+}
+// expandContainer: let k = e.blockId || JSON.stringify(e);
+```
+
+#### 问题 8: 全局扫描 DOM 导致侧边栏/评论混入 (P0-2 已修复)
+
+**现象**: 导出的 markdown 里出现 "本文暂未被其它文档引用" "关系图推荐" "真诚点赞" 等侧边栏内容.
+
+**根因**: `n(e, t)` 函数签名接收根容器 `e`, 但函数体用 `document.querySelectorAll` 全局扫描, 完全忽略了 `e`. 侧边栏、评论、AI 推荐等在正文容器外的内容被收集. 此外, 收集到 `data-record-id` 后会 `return` 提前退出, 导致同一轮中 `data-block-id` 文档块被漏掉.
+
+**修复**: 
+1. `n` 函数改用 `e.querySelectorAll` 限定在滚动容器(正文根)内收集
+2. 不再提前返回, `data-record-id` 和 `data-block-id` 都收集
+3. 用 DOM 元素 `Set` 去重, 避免同一元素被两种属性重复收集
+
+#### 问题 9: 嵌套列表被展平成一行 (P0-3 已修复)
+
+**现象**: 飞书列表项内嵌套子列表项时, 子列表项文本被合并到父项一行, 缩进和层级丢失.
 
 ```
 - •【产品数据】当前卡五星好友房DAU为：◦卡五星：1300◦孝感卡五星：130+
-- ◦卡五星：1300
-- ◦孝感卡五星：130+
 ```
 
-**根因**: `a(e)` 递归收集所有文本, 把子列表项的文本合并到父列表项里. 同时子列表项是独立的 block(有 `data-block-id`), 被独立收集输出.
+**根因**: `v(e, t)` 调用 `a(e)` 递归收集所有文本, 包括子列表项的内容. 子列表项的 DOM 嵌套在父列表项 block 里, `a(e)` 不识别 block 边界, 全部合并.
 
-**当前状态**: 跳过嵌套 block 后, 子列表项不再被独立收集. 但父列表项的 `a(e)` 仍然把子内容合并到一行, 子列表项的结构(缩进、层级)丢失.
+**修复**: `v` 函数改造为递归构建子列表树:
+1. 克隆 `e`, 移除子列表项 block, 用 `a(cloned)` 只收集直接文本
+2. 查询直接子列表项 block(从 `parentElement` 向上找, 遇到 `e` 之前不能有其他列表项)
+3. 递归调用 `v(child)` 生成 `subList`, 合并连续同类型项
+4. `background.js` 的 `convertList` 已支持 `subList` 字段递归渲染缩进
 
-**无法完全解决的原因**: `a(e)` 的设计是递归收集所有文本, 不识别嵌套的 block 结构. 要正确处理嵌套列表, 需要 `a(e)` 能识别子 block 的边界并生成嵌套的 list 结构, 这需要重构整个解析逻辑.
+```javascript
+let cloned = e.cloneNode(true);
+for (let child of cloned.querySelectorAll(childListSel)) child.remove();
+let mainContent = a(cloned);  // 只含直接文本
+// 递归处理子列表项 -> item.subList
+```
 
-#### 问题 8: 侧边栏内容被收集
+### 8.2 部分解决仍有残留的问题
 
-**现象**: 导出的 markdown 里出现 "本文暂未被其它文档引用" "关系图推荐内容由 AI 生成" "真诚点赞，手留余香" 等侧边栏内容.
+#### 问题 7: 列表项子内容被合并到一行 (已修复, 见 8.1 问题 9)
 
-**根因**: 这些内容在飞书 DOM 里有 `data-block-id` 或 `data-record-id`, 被 `n` 函数收集.
+已通过 P0-3 修复, 详见 8.1 问题 9. `v` 函数递归构建子列表树, 父项不再合并子项文本.
 
-**当前状态**: 没有专门的过滤逻辑. 这些内容会被当作普通 block 输出.
+#### 问题 8: 侧边栏内容被收集 (已修复, 见 8.1 问题 8)
 
-**无法完全解决的原因**: 侧边栏内容与正文内容在 DOM 层面没有明确的区分标记, 无法用统一规则过滤. 需要针对每种侧边栏元素(评论、引用、AI 推荐)写专门的过滤逻辑.
+已通过 P0-2 修复, 详见 8.1 问题 8. `n` 函数限定在正文根容器内收集, 侧边栏不混入.
 
 #### 问题 9: processContainer 的"直接子 block"判断可能不准确
 
@@ -413,15 +445,13 @@ if (e.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
 
 **无法解决**: Markdown 表格 cell 不支持图片. 可以用 HTML `<img>` 标签, 但不是所有渲染器都支持.
 
-#### 限制 5: cell 内的样式可能冲突
+#### 限制 5: cell 内的管道符冲突 (已修复)
 
-**问题**: cell 内的加粗、斜体等样式可能与表格管道符 `|` 冲突.
+**问题**: cell 内容包含 `|` 字符(如 `阶段|分类`), Markdown 解析器会误认为是列分隔符, 导致表格列数错乱.
 
-**原因**: 如果 cell 内容包含 `|` 字符(如 `**加粗|文本**`), Markdown 解析器可能误认为是列分隔符.
+**原因**: Markdown 表格用 `|` 作为列分隔符, cell 内的 `|` 需要用 `\|` 转义.
 
-**影响**: 表格列数错乱.
-
-**无法解决**: Markdown 表格用 `|` 作为列分隔符, cell 内的 `|` 需要用 `\|` 转义. 当前实现没有做转义处理.
+**状态**: 已修复(P1-1). `background.js` 的 `convertTable` 新增 `esc` 辅助函数, 对每个 cell 的 `convertInline` 结果做 `s.replace(/\|/g, '\\|')` 转义. 这不是 Markdown 的固有限制, 是之前实现缺失.
 
 ### 8.4 飞书 DOM 相关的无法解决的问题
 

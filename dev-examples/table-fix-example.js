@@ -82,6 +82,17 @@ class MockNode {
     }
     return c;
   }
+  remove() {
+    if (this.parentElement) {
+      const idx = this.parentElement.children.indexOf(this);
+      if (idx >= 0) this.parentElement.children.splice(idx, 1);
+      this.parentElement.childNodes = this.parentElement.children;
+      this.parentElement = null;
+    }
+  }
+  hasAttribute(name) {
+    return this._attrs[name] !== undefined;
+  }
   get classList() {
     const self = this;
     return {
@@ -217,33 +228,32 @@ function l(e) {
   }
   return t;
 }
+// 在正文根容器 e 内收集 block, 限定范围避免侧边栏混入
+// 同时收集 data-record-id 和 data-block-id, 不提前返回
 function n(e, t) {
-  let n = document.querySelectorAll(`[data-record-id]`);
-  if (n.length > 0) {
-    let r = !1;
-    for (let e of Array.from(n)) {
-      if (e.closest(`table`)) continue;
-      if (e.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
-      let n = e.getAttribute(`data-record-id`);
-      t.has(n) || (t.set(n, e.cloneNode(!0)), r = !0);
-    }
-    if (r) return;
+  let seen = new Set();
+  for (let el of Array.from(e.querySelectorAll(`[data-record-id]`))) {
+    if (seen.has(el)) continue;
+    seen.add(el);
+    if (el.closest(`table`)) continue;
+    if (el.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
+    let id = el.getAttribute(`data-record-id`);
+    t.has(id) || t.set(id, el.cloneNode(!0));
   }
-  let i = document.querySelectorAll(`[data-block-id]`);
-  if (i.length > 0) {
-    let r = !1;
-    for (let e of Array.from(i)) {
-      if (e.closest(`table`) && e.getAttribute(`data-block-type`) !== `table`) continue;
-      if (e.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
-      let n = e.getAttribute(`data-block-id`);
-      t.has(n) || (t.set(n, e.cloneNode(!0)), r = !0);
-    }
-    if (r) return;
+  for (let el of Array.from(e.querySelectorAll(`[data-block-id]`))) {
+    if (seen.has(el)) continue;
+    seen.add(el);
+    if (el.closest(`table`) && el.getAttribute(`data-block-type`) !== `table`) continue;
+    if (el.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
+    let id = el.getAttribute(`data-block-id`);
+    t.has(id) || t.set(id, el.cloneNode(!0));
   }
-  let a = e.querySelectorAll(`:scope > div, :scope > p, :scope > section`);
-  for (let e of Array.from(a)) {
-    let n = `child_${t.size}`;
-    !t.has(n) && e.textContent?.trim() && t.set(n, e.cloneNode(!0));
+  if (t.size === 0) {
+    let children = e.querySelectorAll(`:scope > div, :scope > p, :scope > section`);
+    for (let el of Array.from(children)) {
+      let id = `child_${t.size}`;
+      !t.has(id) && el.textContent?.trim() && t.set(id, el.cloneNode(!0));
+    }
   }
 }
 function g(e) {
@@ -653,7 +663,221 @@ function test6() {
   return false;
 }
 
-const results = [test1(), test2(), test3(), test4(), test5(), test6()];
+// ============ 辅助函数: expandContainer (用 blockId 去重) ============
+function withBlockId(node, blockId) {
+  if (node && blockId) node.blockId = blockId;
+  return node;
+}
+function expandContainer(e, seen) {
+  if (e.type === 'container') {
+    let result = [];
+    for (let c of e.children) result.push(...expandContainer(c, seen));
+    return result;
+  }
+  let k = e.blockId || JSON.stringify(e);
+  if (seen.has(k)) return [];
+  seen.add(k);
+  return [e];
+}
+
+// ============ 测试 7: Block ID 去重, 不误删相同内容不同位置的段落 ============
+function test7() {
+  console.log('\n--- 测试 7: Block ID 去重, 不误删相同内容不同位置的段落 ---');
+  // 两个段落, 内容相同, blockId 不同
+  const para1 = withBlockId({ type: 'paragraph', children: [{ type: 'text', content: '需要记录日志', marks: [] }] }, 'block-a');
+  const para2 = withBlockId({ type: 'paragraph', children: [{ type: 'text', content: '需要记录日志', marks: [] }] }, 'block-b');
+  // 对照组: 无 blockId, 内容相同
+  const para3 = { type: 'paragraph', children: [{ type: 'text', content: '相同内容', marks: [] }] };
+  const para4 = { type: 'paragraph', children: [{ type: 'text', content: '相同内容', marks: [] }] };
+
+  const seen = new Set();
+  const out1 = expandContainer(para1, seen);
+  const out2 = expandContainer(para2, seen);
+  const out3 = expandContainer(para3, seen);
+  const out4 = expandContainer(para4, seen);
+  const total = out1.length + out2.length + out3.length + out4.length;
+  console.log(`  blockId 不同的两段: 各保留 ${out1.length} 和 ${out2.length} (期望各 1)`);
+  console.log(`  无 blockId 内容相同的两段: 保留 ${out3.length + out4.length} (期望 1, 第二个被去重)`);
+  console.log(`  总计保留: ${total} (期望 3)`);
+
+  if (out1.length === 1 && out2.length === 1 && out3.length + out4.length === 1 && total === 3) {
+    console.log('  [通过] blockId 不同的段落不被误删, 无 blockId 的相同内容正确去重');
+    return true;
+  }
+  console.log('  [失败]');
+  return false;
+}
+
+// ============ 测试 8: n() 限定正文根容器, 侧边栏不混入 ============
+function test8() {
+  console.log('\n--- 测试 8: n() 限定正文根容器, 侧边栏不混入 ---');
+  // 正文根容器, 内有 block-1
+  const docBlock = new MockNode({
+    tagName: 'div',
+    attrs: { 'data-block-id': 'block-1', 'data-block-type': 'text' },
+    children: [new MockNode({ nodeType: 3, textContent: '正文内容' })],
+  });
+  const docRoot = new MockNode({
+    tagName: 'div',
+    className: 'doc-content-container',
+    children: [docBlock],
+  });
+  docBlock.parentElement = docRoot;
+  // 侧边栏 block (在 docRoot 之外)
+  const sidebarBlock = new MockNode({
+    tagName: 'div',
+    attrs: { 'data-block-id': 'sidebar-1', 'data-block-type': 'text' },
+    children: [new MockNode({ nodeType: 3, textContent: '本文引用推荐' })],
+  });
+  // 用一个顶层容器模拟 document, 包含 docRoot 和 sidebarBlock
+  const topDocument = new MockNode({
+    tagName: 'div',
+    children: [docRoot, sidebarBlock],
+  });
+  docRoot.parentElement = topDocument;
+  sidebarBlock.parentElement = topDocument;
+  // n(docRoot, map) 只收集 docRoot 内的 block
+  const blocks = new Map();
+  n(docRoot, blocks);
+  console.log(`  n 收集到 ${blocks.size} 个 block (期望 1: 只有 block-1)`);
+  console.log(`  block-1 被收集: ${blocks.has('block-1')}`);
+  console.log(`  sidebar-1 被收集: ${blocks.has('sidebar-1')} (应为 false)`);
+  if (blocks.size === 1 && blocks.has('block-1') && !blocks.has('sidebar-1')) {
+    console.log('  [通过] n 限定正文根容器, 侧边栏不混入');
+    return true;
+  }
+  console.log('  [失败]');
+  return false;
+}
+
+// ============ 测试 9: v() 递归构建子列表, 不再展平成一行 ============
+function test9() {
+  console.log('\n--- 测试 9: v() 递归构建子列表, 不再展平成一行 ---');
+  // 简化的 a 函数: 收集文本节点的文本
+  function amock(e) {
+    let t = [];
+    (function o(e, t, n) {
+      if (e.nodeType === 3) {
+        let r = (e.textContent || '').replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '');
+        r && n.push({ type: 'text', content: r, marks: [...t] });
+        return;
+      }
+      if (e.nodeType !== 1) return;
+      for (let c of Array.from(e.childNodes)) o(c, t, n);
+    })(e, [], t);
+    return t;
+  }
+  // 简化的 v 函数副本 (同步 content.js 的最新逻辑)
+  function vmock(e, t) {
+    let n = t || e.getAttribute('data-block-type') || '', r = 'unordered';
+    n === 'ordered' ? (r = 'ordered') : n === 'todo' && (r = 'todo');
+    let childListSel = '[data-block-type="bullet"], [data-block-type="ordered"], [data-block-type="todo"]';
+    let cloned = e.cloneNode(true);
+    for (let child of cloned.querySelectorAll(childListSel)) child.remove();
+    let mainContent = amock(cloned);
+    let item = { children: mainContent };
+    let childListBlocks = Array.from(e.querySelectorAll(childListSel)).filter(child => {
+      let p = child.parentElement;
+      while (p && p !== e) {
+        let bt = p.getAttribute && p.getAttribute('data-block-type');
+        if (bt === 'bullet' || bt === 'ordered' || bt === 'todo') return false;
+        p = p.parentElement;
+      }
+      return true;
+    });
+    if (childListBlocks.length > 0) {
+      let subList = null;
+      for (let child of childListBlocks) {
+        let childType = child.getAttribute('data-block-type') || '';
+        let childList = vmock(child, childType);
+        if (subList && subList.style === childList.style) subList.items.push(...childList.items);
+        else if (!subList) subList = childList;
+      }
+      if (subList) item.subList = subList;
+    }
+    return { type: 'list', style: r, items: [item] };
+  }
+  // 构造: 父列表项, 包含 "父项内容" 文本 + 子列表项 (包含 "子项内容")
+  const childList = new MockNode({
+    tagName: 'div',
+    attrs: { 'data-block-type': 'bullet', 'data-block-id': 'list-2' },
+    children: [new MockNode({ nodeType: 3, textContent: '子项内容' })],
+  });
+  const parentList = new MockNode({
+    tagName: 'div',
+    attrs: { 'data-block-type': 'bullet', 'data-block-id': 'list-1' },
+    children: [
+      new MockNode({ nodeType: 3, textContent: '父项内容' }),
+      childList,
+    ],
+  });
+  childList.parentElement = parentList;
+  const result = vmock(parentList, 'bullet');
+  const item = result.items[0];
+  const mainText = item.children.map(c => c.content).join('');
+  const hasSubList = !!item.subList;
+  const subText = hasSubList ? item.subList.items[0].children.map(c => c.content).join('') : '';
+  console.log(`  父项文本: "${mainText}" (期望 "父项内容", 不含 "子项内容")`);
+  console.log(`  subList 存在: ${hasSubList} (期望 true)`);
+  console.log(`  子项文本: "${subText}" (期望 "子项内容")`);
+  if (mainText === '父项内容' && hasSubList && subText === '子项内容') {
+    console.log('  [通过] 父项不含子项文本, subList 正确生成');
+    return true;
+  }
+  console.log('  [失败]');
+  return false;
+}
+
+// ============ 测试 10: convertTable 转义 cell 内的管道符 ============
+function test10() {
+  console.log('\n--- 测试 10: convertTable 转义 cell 内的管道符 ---');
+  // 复制 background.js 的 convertTable 逻辑 (含 esc 转义)
+  function convertInline(children) {
+    return children.map(c => {
+      let s = c.content;
+      for (let m of (c.marks || [])) {
+        if (m.type === 'bold') s = `**${s}**`;
+        if (m.type === 'italic') s = `*${s}*`;
+        if (m.type === 'code') s = '`' + s + '`';
+      }
+      return s;
+    }).join('');
+  }
+  function convertTable(e) {
+    let esc = s => s.replace(/\|/g, '\\|');
+    return e.headers.length === 0 ? '' : [
+      `| ` + e.headers.map(e => esc(convertInline(e.children))).join(` | `) + ` |`,
+      `| ` + e.headers.map(() => `---`).join(` | `) + ` |`,
+      ...e.rows.map(e => `| ` + e.map(e => esc(convertInline(e.children))).join(` | `) + ` |`)
+    ].join('\n');
+  }
+  // 表格 cell 包含管道符 (表头1列, 数据行1列, 列数一致)
+  const table = {
+    type: 'table',
+    headers: [{ children: [{ type: 'text', content: '阶段|分类', marks: [] }] }],
+    rows: [
+      [{ children: [{ type: 'text', content: '牌墙|信息', marks: [] }] }],
+    ],
+  };
+  const md = convertTable(table);
+  console.log(`  输出:\n${md}`);
+  // 验证 cell 内的 | 被转义为 \| (用正则 split 跳过转义的 \|)
+  const lines = md.split('\n');
+  const headerCells = lines[0].split(/(?<!\\)\|/).filter(s => s.trim());
+  const dataCells = lines[2].split(/(?<!\\)\|/).filter(s => s.trim());
+  console.log(`  表头列数: ${headerCells.length} (期望 1, 管道符被转义不拆列)`);
+  console.log(`  数据行列数: ${dataCells.length} (期望 1)`);
+  const hasEsc = md.includes('\\|');
+  console.log(`  含转义符 \\|: ${hasEsc} (期望 true)`);
+  if (headerCells.length === 1 && dataCells.length === 1 && hasEsc) {
+    console.log('  [通过] 管道符被正确转义, 列数不错乱');
+    return true;
+  }
+  console.log('  [失败]');
+  return false;
+}
+
+const results = [test1(), test2(), test3(), test4(), test5(), test6(), test7(), test8(), test9(), test10()];
 const passCount = results.filter(Boolean).length;
 console.log(`\n=== 测试结果: ${passCount}/${results.length} 通过 ===`);
 process.exit(passCount === results.length ? 0 : 1);
