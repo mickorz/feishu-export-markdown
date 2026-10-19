@@ -29,9 +29,30 @@ class MockNode {
     const r = this.querySelectorAll(selector);
     return r.length ? r[0] : null;
   }
-  closest(tagName) {
+  closest(selector) {
     let n = this;
-    const upper = tagName.toUpperCase();
+    // 支持 [attr] 属性选择器
+    let m = selector.match(/^\[([\w-]+)\]$/);
+    if (m) {
+      const attr = m[1];
+      while (n) {
+        if (n.nodeType === 1 && n._attrs && n._attrs[attr] !== undefined) return n;
+        n = n.parentElement;
+      }
+      return null;
+    }
+    // 支持 [attr^="prefix"] 属性前缀选择器
+    m = selector.match(/^\[([\w-]+)\^="([^"]*)"\]$/);
+    if (m) {
+      const [, attr, prefix] = m;
+      while (n) {
+        if (n.nodeType === 1 && n._attrs && n._attrs[attr] !== undefined && n._attrs[attr].startsWith(prefix)) return n;
+        n = n.parentElement;
+      }
+      return null;
+    }
+    // 支持标签名
+    const upper = selector.toUpperCase();
     while (n) {
       if (n.tagName === upper) return n;
       n = n.parentElement;
@@ -84,7 +105,7 @@ function matchSingle(root, selector) {
   let m = selector.match(/^\[([\w-]+)\^="([^"]*)"\]$/);
   if (m) {
     const [, attr, prefix] = m;
-    walk(root, n => {
+    walkDescendants(root, n => {
       if (n.nodeType === 1 && n._attrs[attr] !== undefined && n._attrs[attr].startsWith(prefix)) results.push(n);
     });
     return results;
@@ -93,7 +114,7 @@ function matchSingle(root, selector) {
   m = selector.match(/^\[([\w-]+)(?:="([^"]*)")?\]$/);
   if (m) {
     const [, attr, value] = m;
-    walk(root, n => {
+    walkDescendants(root, n => {
       if (n.nodeType === 1 && n._attrs[attr] !== undefined) {
         if (value === undefined || n._attrs[attr] === value) results.push(n);
       }
@@ -105,14 +126,14 @@ function matchSingle(root, selector) {
   if (m) {
     const [, tag, attr, prefix] = m;
     const upper = tag.toUpperCase();
-    walk(root, n => {
+    walkDescendants(root, n => {
       if (n.nodeType === 1 && n.tagName === upper && n._attrs[attr] !== undefined && n._attrs[attr].startsWith(prefix)) results.push(n);
     });
     return results;
   }
   if (/^[a-zA-Z]+$/.test(selector)) {
     const upper = selector.toUpperCase();
-    walk(root, n => {
+    walkDescendants(root, n => {
       if (n.nodeType === 1 && n.tagName === upper) results.push(n);
     });
     return results;
@@ -136,6 +157,13 @@ function matchesSimple(node, selector) {
 function walk(node, fn) {
   fn(node);
   if (node.children) node.children.forEach(c => walk(c, fn));
+}
+// querySelectorAll 只查后代不包括 root 自己
+function walkDescendants(node, fn) {
+  if (node.children) node.children.forEach(c => {
+    fn(c);
+    walkDescendants(c, fn);
+  });
 }
 
 // ============ 修复后的函数 (从 content.js 复制) ============
@@ -188,7 +216,7 @@ function n(e, t) {
     let r = !1;
     for (let e of Array.from(n)) {
       if (e.closest(`table`)) continue;
-      if (e.getAttribute(`data-block-type`) !== `table` && e.querySelectorAll(`[data-block-id]`).length > 10) continue;
+      if (e.parentElement?.closest(`[data-record-id]`)) continue;
       let n = e.getAttribute(`data-record-id`);
       t.has(n) || (t.set(n, e.cloneNode(!0)), r = !0);
     }
@@ -199,7 +227,7 @@ function n(e, t) {
     let r = !1;
     for (let e of Array.from(i)) {
       if (e.closest(`table`) && e.getAttribute(`data-block-type`) !== `table`) continue;
-      if (e.getAttribute(`data-block-type`) !== `table` && e.querySelectorAll(`[data-block-id]`).length > 10) continue;
+      if (e.parentElement?.closest(`[data-block-id]`)) continue;
       let n = e.getAttribute(`data-block-id`);
       t.has(n) || (t.set(n, e.cloneNode(!0)), r = !0);
     }
@@ -528,55 +556,87 @@ function test5() {
   return false;
 }
 
-// ============ 运行所有测试 ============
-// 测试 6: n 函数跳过超大容器 block
+// ============ 测试 6: n 跳过嵌套 block + processContainer 递归处理 ============
 function test6() {
-  console.log('\n--- 测试 6: n 函数跳过超大容器 block ---');
-  // 构造超大容器: 内含 15 个带 data-block-id 的子 block
-  const children = [];
-  for (let i = 0; i < 15; i++) {
-    children.push(new MockNode({
+  console.log('\n--- 测试 6: n 跳过嵌套 block + processContainer 递归处理 ---');
+
+  // 构造超大容器: 内含 3 个带 data-block-id 的子 block
+  function makeBlock(id, type, text) {
+    const b = new MockNode({
       tagName: 'div',
-      attrs: { 'data-block-id': 'inner-' + i, 'data-block-type': 'text' },
-      children: [new MockNode({ nodeType: 3, textContent: '子块' + i })],
-    }));
+      attrs: { 'data-block-id': id, 'data-block-type': type },
+      children: [new MockNode({ nodeType: 3, textContent: text })],
+    });
+    b.children[0].parentElement = b;
+    return b;
   }
+  const tableBlock = makeBlock('inner-table', 'table', '表格内容');
+  const headingBlock = makeBlock('inner-heading', 'heading1', '章节标题');
+  const paraBlock = makeBlock('inner-para', 'text', '段落内容');
+
+  // 超大容器 (data-block-type=group, 包含 3 个子 block)
   const bigContainer = new MockNode({
     tagName: 'div',
-    attrs: { 'data-block-id': 'big-container', 'data-block-type': 'text' },
-    children: children,
+    attrs: { 'data-block-id': 'big-container', 'data-block-type': 'group' },
+    children: [tableBlock, headingBlock, paraBlock],
   });
-  children.forEach(c => (c.parentElement = bigContainer));
-
-  // 还需要一个正常的内容 block (不含子 block)
-  const normalBlock = new MockNode({
-    tagName: 'div',
-    attrs: { 'data-block-id': 'normal-1', 'data-block-type': 'text' },
-    children: [new MockNode({ nodeType: 3, textContent: '正常段落' })],
-  });
+  tableBlock.parentElement = bigContainer;
+  headingBlock.parentElement = bigContainer;
+  paraBlock.parentElement = bigContainer;
 
   const docContent = new MockNode({
     tagName: 'div',
     className: 'doc-content',
-    children: [bigContainer, normalBlock],
+    children: [bigContainer],
   });
   bigContainer.parentElement = docContent;
-  normalBlock.parentElement = docContent;
 
+  // 验证 1: n 函数只收集顶层 block, 不收集嵌套 block
   global.document = docContent;
   const blocks = new Map();
   n(docContent, blocks);
+  console.log(`  n 收集到 ${blocks.size} 个 block (期望 1: 只收集 big-container)`);
+  const hasBig = blocks.has('big-container');
+  const hasInner = blocks.has('inner-table') || blocks.has('inner-heading') || blocks.has('inner-para');
+  console.log(`  超大容器被收集: ${hasBig}, 内部子块被收集: ${hasInner} (应为 false)`);
 
-  console.log(`  收集到 ${blocks.size} 个 block`);
-  const hasBigContainer = blocks.has('big-container');
-  const hasInner = Array.from(blocks.keys()).some(k => k.startsWith('inner-'));
-  const hasNormal = blocks.has('normal-1');
-  console.log(`  超大容器被收集: ${hasBigContainer} (应为 false)`);
-  console.log(`  内部子块被收集: ${hasInner} (应为 true, 子块被独立收集)`);
-  console.log(`  正常段落被收集: ${hasNormal} (应为 true)`);
+  // 验证 2: processContainer 递归处理, 子 block 被正确识别
+  function Lmock(e) {
+    const bt = e.getAttribute('data-block-type') || '';
+    if (bt === 'table') return { type: 'table', headers: [], rows: [] };
+    if (bt.startsWith('heading')) return { type: 'heading', level: 1, children: [{ type: 'text', content: e.textContent, marks: [] }] };
+    if (e.querySelectorAll('[data-block-id]').length > 1) return processContainerMock(e);
+    return { type: 'paragraph', children: [{ type: 'text', content: e.textContent, marks: [] }] };
+  }
+  function processContainerMock(e) {
+    let t = [];
+    let n = e.querySelectorAll('[data-block-id]');
+    for (let r of Array.from(n)) {
+      let p = r.parentElement;
+      let isDirect = !0;
+      while (p && p !== e) {
+        if (p.hasAttribute && p.hasAttribute('data-block-id')) { isDirect = !1; break; }
+        p = p.parentElement;
+      }
+      if (!isDirect) continue;
+      if (r.closest('table') && r !== e) continue;
+      let parsed = Lmock(r);
+      if (parsed !== null) t.push(parsed);
+    }
+    return t.length === 0 ? null : { type: 'container', children: t };
+  }
 
-  if (!hasBigContainer && hasInner && hasNormal) {
-    console.log('  [通过] 超大容器被跳过, 内部子块和正常段落被收集');
+  const result = processContainerMock(bigContainer);
+  console.log(`  processContainer 返回: ${result ? result.type : 'null'}`);
+  if (result) {
+    const types = result.children.map(c => c.type);
+    console.log(`  children 类型: ${JSON.stringify(types)} (期望包含 table/heading/paragraph)`);
+  }
+
+  if (hasBig && !hasInner && result && result.children.length === 3 &&
+      result.children.some(c => c.type === 'table') &&
+      result.children.some(c => c.type === 'heading')) {
+    console.log('  [通过] 嵌套 block 被跳过, 容器递归处理, table/heading 被正确识别');
     return true;
   }
   console.log('  [失败]');

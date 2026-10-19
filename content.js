@@ -263,11 +263,8 @@
       let r = !1;
       for (let e of Array.from(n)) {
         if (e.closest(`table`)) continue;
-        if (
-          e.getAttribute(`data-block-type`) !== `table` &&
-          e.querySelectorAll(`[data-block-id]`).length > 10
-        )
-          continue;
+        // 跳过嵌套 block: 祖先也有 data-record-id, 避免重复收集
+        if (e.parentElement?.closest(`[data-record-id]`)) continue;
         let n = e.getAttribute(`data-record-id`);
         t.has(n) || (t.set(n, e.cloneNode(!0)), (r = !0));
       }
@@ -278,11 +275,9 @@
       let r = !1;
       for (let e of Array.from(i)) {
         if (e.closest(`table`) && e.getAttribute(`data-block-type`) !== `table`) continue;
-        if (
-          e.getAttribute(`data-block-type`) !== `table` &&
-          e.querySelectorAll(`[data-block-id]`).length > 10
-        )
-          continue;
+        // 跳过嵌套 block: 祖先也有 data-block-id, 避免重复收集
+        // 嵌套 block 会通过容器递归处理(processContainer)被解析
+        if (e.parentElement?.closest(`[data-block-id]`)) continue;
         let n = e.getAttribute(`data-block-id`);
         t.has(n) || (t.set(n, e.cloneNode(!0)), (r = !0));
       }
@@ -668,6 +663,31 @@
     }
     return t > 20 && n > 0 && t > n * 0.8;
   }
+  // 递归处理容器的直接子 block
+  // 只处理"直接子 block"(最近祖先容器是 e), 嵌套的更深 block 由直接子 block 递归处理
+  // 这样超大容器内的 table/heading/code 等都能被 L 正确识别, 而不是合并成一串文本
+  function processContainer(e) {
+    let t = [];
+    let n = e.querySelectorAll(`[data-block-id]`);
+    for (let r of Array.from(n)) {
+      // 判断 r 是否是 e 的直接子 block: 从 r.parentElement 向上找, 遇到 e 之前不能有其他 data-block-id
+      let p = r.parentElement;
+      let isDirect = !0;
+      while (p && p !== e) {
+        if (p.hasAttribute && p.hasAttribute(`data-block-id`)) {
+          isDirect = !1;
+          break;
+        }
+        p = p.parentElement;
+      }
+      if (!isDirect) continue;
+      // 跳过 table 内部元素(由 g 函数处理)
+      if (r.closest(`table`) && r !== e) continue;
+      let parsed = L(r);
+      if (parsed !== null) t.push(parsed);
+    }
+    return t.length === 0 ? null : { type: `container`, children: t };
+  }
   function I(e) {
     let t = [],
       n = new Set();
@@ -675,68 +695,103 @@
       let e = L(r);
       if (e === null) continue;
       if (e.type === `heading` && isCatalogInline(e.children)) continue;
+      // 展开 container: 把容器的 children 提升到文档顶层, 不作为独立 block
+      if (e.type === `container`) {
+        for (let c of e.children) {
+          let k = JSON.stringify(c);
+          if (n.has(k)) continue;
+          n.add(k);
+          t.push(c);
+        }
+        continue;
+      }
       let i = JSON.stringify(e);
       if (n.has(i)) continue;
-      (n.add(i), t.push(e));
+      n.add(i);
+      t.push(e);
     }
     return { type: `document`, title: R(e), children: t };
   }
   function L(e) {
     let t = e.getAttribute(`data-block-type`) || ``;
-    return t === `page` ||
-      t === `grid` ||
-      t === `grid_column` ||
-      e.classList.contains(`docx-block-zero-space`) ||
-      (!e.textContent?.trim() && !e.querySelector(`img, iframe, hr, table`))
-      ? null
-      : isCatalog(e)
-        ? null
-        : t.startsWith(`heading`)
-          ? d(e, t)
-          : t === `code`
-            ? m(e)
-            : t === `table`
-              ? g(e)
-              : t === `equation`
-                ? j(e)
-                : t === `image` || t === `gallery`
-                  ? T(e)
-                  : t === `callout`
-                    ? N(e)
-                    : t === `quote_container`
-                      ? x(e)
-                      : t === `divider` || t === `horizontal_rule`
-                        ? C()
-                        : t === `embed` || t === `iframe`
-                          ? F(e)
-                          : t === `bullet` ||
-                              t === `ordered` ||
-                              t === `todo` ||
-                              e.classList.contains(`docx-bullet-block`) ||
-                              e.classList.contains(`docx-ordered-block`) ||
-                              e.classList.contains(`docx-todo-block`)
-                            ? v(e, t)
-                            : S(e)
-                              ? C()
-                              : u(e)
-                                ? d(e, ``)
-                                : p(e)
-                                  ? m(e)
-                                  : h(e)
-                                    ? g(e)
-                                    : A(e)
-                                      ? j(e)
-                                      : w(e)
-                                        ? T(e)
-                                        : P(e)
-                                          ? F(e)
-                                          : b(e)
-                                            ? x(e)
-                                            : M(e)
-                                              ? N(e)
-                                              : _(e, ``)
-                                                ? v(e, ``)
-                                                : f(e);
+    // 空文本且无任何内容元素: 跳过
+    if (!e.textContent?.trim() && !e.querySelector(`img, iframe, hr, table`)) return null;
+    // 目录块: 跳过
+    if (isCatalog(e)) return null;
+    // page/grid/grid_column: 当作容器递归处理子 block (不再返回 null 丢失内容)
+    if (t === `page` || t === `grid` || t === `grid_column` || e.classList.contains(`docx-block-zero-space`))
+      return processContainer(e);
+    // 容器检测: 包含多个子 block 且不是已知的内容块类型 -> 递归处理
+    // 放在 u(e) 之前, 避免超大容器因内部有 <h1> 被误判为 heading
+    if (
+      t !== `table` &&
+      t !== `quote_container` &&
+      t !== `callout` &&
+      !t.startsWith(`heading`) &&
+      t !== `code` &&
+      t !== `image` &&
+      t !== `gallery` &&
+      t !== `equation` &&
+      t !== `embed` &&
+      t !== `iframe` &&
+      t !== `divider` &&
+      t !== `horizontal_rule` &&
+      t !== `bullet` &&
+      t !== `ordered` &&
+      t !== `todo` &&
+      !e.classList.contains(`docx-bullet-block`) &&
+      !e.classList.contains(`docx-ordered-block`) &&
+      !e.classList.contains(`docx-todo-block`)
+    ) {
+      let subBlocks = e.querySelectorAll(`[data-block-id]`);
+      if (subBlocks.length > 1) return processContainer(e);
+    }
+    return t.startsWith(`heading`)
+      ? d(e, t)
+      : t === `code`
+        ? m(e)
+        : t === `table`
+          ? g(e)
+          : t === `equation`
+            ? j(e)
+            : t === `image` || t === `gallery`
+              ? T(e)
+              : t === `callout`
+                ? N(e)
+                : t === `quote_container`
+                  ? x(e)
+                  : t === `divider` || t === `horizontal_rule`
+                    ? C()
+                    : t === `embed` || t === `iframe`
+                      ? F(e)
+                      : t === `bullet` ||
+                          t === `ordered` ||
+                          t === `todo` ||
+                          e.classList.contains(`docx-bullet-block`) ||
+                          e.classList.contains(`docx-ordered-block`) ||
+                          e.classList.contains(`docx-todo-block`)
+                        ? v(e, t)
+                        : S(e)
+                          ? C()
+                          : u(e)
+                            ? d(e, ``)
+                            : p(e)
+                              ? m(e)
+                              : h(e)
+                                ? g(e)
+                                : A(e)
+                                  ? j(e)
+                                  : w(e)
+                                    ? T(e)
+                                    : P(e)
+                                      ? F(e)
+                                      : b(e)
+                                        ? x(e)
+                                        : M(e)
+                                          ? N(e)
+                                          : _(e, ``)
+                                            ? v(e, ``)
+                                            : f(e);
   }
   function R(e) {
     for (let t of e)
