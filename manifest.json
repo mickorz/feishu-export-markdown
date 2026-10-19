@@ -1,0 +1,51 @@
+{
+  "action": {
+    "default_icon": {
+      "128": "icons/128.png",
+      "16": "icons/16.png",
+      "48": "icons/48.png"
+    },
+    "default_popup": "popup/popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "css": [
+        "content.css"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "matches": [
+        "*://*.feishu.cn/docx/*",
+        "*://*.feishu.cn/docs/*",
+        "*://*.feishu.cn/wiki/*",
+        "*://*.lark.suite.com/docx/*",
+        "*://*.lark.suite.com/docs/*",
+        "*://*.lark.suite.com/wiki/*"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "description": "在原有 Markdown、HTML、Word、全部导出基础上新增 Markdown（不包含图片）选项。",
+  "host_permissions": [
+    "*://*.feishu.cn/*",
+    "*://*.lark.suite.com/*"
+  ],
+  "icons": {
+    "128": "icons/128.png",
+    "16": "icons/16.png",
+    "48": "icons/48.png"
+  },
+  "manifest_version": 3,
+  "name": "飞书文档导出专家 - Markdown 纯文本版",
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+  "short_name": "飞书导出·无图",
+  "version": "1.0.2"
+}

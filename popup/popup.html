@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1 class="title">飞书文档导出</h1>
+    <div id="not-feishu" class="hidden">
+      <p class="warning">请在飞书文档页面使用此插件</p>
+    </div>
+    <div id="main-panel">
+      <p class="doc-title" id="doc-title">检测中...</p>
+      <div class="format-group">
+        <label><input type="checkbox" value="markdown" checked> Markdown</label>
+        <label><input type="checkbox" value="markdown-no-images"> Markdown（不包含图片）</label>
+        <label><input type="checkbox" value="html"> HTML</label>
+        <label><input type="checkbox" value="word"> Word</label>
+      </div>
+      <button id="export-btn" class="btn-primary">开始导出</button>
+      <div class="progress-section hidden" id="progress-section">
+        <p id="progress-text">准备中...</p>
+        <div class="progress-bar">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+      </div>
+      <div class="result hidden" id="result">
+        <p class="success">导出成功!</p>
+      </div>
+      <div class="error hidden" id="error">
+        <p id="error-text"></p>
+        <button id="retry-btn" class="btn-secondary">重试</button>
+      </div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
