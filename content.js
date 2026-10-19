@@ -504,7 +504,9 @@
       for (let child of childListBlocks) {
         let childType = child.getAttribute(`data-block-type`) || ``;
         let childBlockId = child.getAttribute(`data-block-id`) || child.getAttribute(`data-record-id`) || ``;
+        let childTxt = (child.textContent || ``).substring(0, 30);
         if (childBlockId) subListBlockIds.add(childBlockId);
+        console.log(`[feishu-export] v() subList child: id=${childBlockId} type=${childType} text="${childTxt}"`);
         let childList = v(child, childType);
         if (subList && subList.style === childList.style) {
           subList.items.push(...childList.items);
@@ -734,18 +736,31 @@
     subListBlockIds.clear();
     let t = [],
       n = new Set();
+    let skippedCount = 0;
     for (let r of e) {
       // 跳过已被 v() 作为 subList 处理的子列表项, 避免双重输出
       let bid = r.getAttribute(`data-block-id`) || r.getAttribute(`data-record-id`) || ``;
-      if (bid && subListBlockIds.has(bid)) continue;
+      if (bid && subListBlockIds.has(bid)) {
+        let bt = r.getAttribute(`data-block-type`) || ``;
+        let txt = (r.textContent || ``).substring(0, 30);
+        console.log(`[feishu-export] SKIP subList block: id=${bid} type=${bt} text="${txt}"`);
+        skippedCount++;
+        continue;
+      }
       let e = L(r);
-      if (e === null) continue;
+      if (e === null) {
+        let bt = r.getAttribute(`data-block-type`) || ``;
+        let txt = (r.textContent || ``).substring(0, 30);
+        console.log(`[feishu-export] L returned null: type=${bt} text="${txt}"`);
+        continue;
+      }
       if (e.type === `heading` && isCatalogInline(e.children)) continue;
       // 递归展开 container: 把容器的 children 提升到文档顶层
       // container 可能嵌套(容器内的容器), 需要递归展开到底
       let expanded = expandContainer(e, n);
       t.push(...expanded);
     }
+    console.log(`[feishu-export] I() skipped ${skippedCount} subList blocks, ${t.length} children remaining`);
     return { type: `document`, title: R(e), children: t };
   }
   // 递归展开 container, 用 blockId 去重
