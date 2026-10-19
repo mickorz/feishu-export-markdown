@@ -257,37 +257,37 @@
       Array.from(t.values())
     );
   }
-  // 收集文档 block
-  // 先在根容器 e (滚动容器) 内收集, 限定范围避免侧边栏混入
-  // 若收集到的 block 太少 (<5), 说明 e 不包含所有正文内容,
-  // fallback 到 document 全局扫描 (宁可混入侧边栏也不能丢正文)
-  // 同时收集 data-record-id 和 data-block-id, 不提前返回
-  // 用 DOM 元素 Set 去重, 避免同一元素被两种属性重复收集
+  // 收集文档 block, 全局扫描 document
+  // 保留: 不提前返回(data-record-id 和 data-block-id 都收集)
+  //       DOM 元素 Set 去重(避免同一元素被两种属性重复收集)
+  //       跳过嵌套 block(通过 processContainer 递归处理)
+  // 注: 之前尝试限定在滚动容器 e 内收集, 但飞书 DOM 的文档内容
+  // 不在滚动容器内(只在 document 下), 限定范围导致大量内容丢失
   function n(e, t) {
     let seen = new Set();
-    function collectFrom(root) {
-      for (let el of Array.from(root.querySelectorAll(`[data-record-id]`))) {
-        if (seen.has(el)) continue;
-        seen.add(el);
-        if (el.closest(`table`)) continue;
-        if (el.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
-        let id = el.getAttribute(`data-record-id`);
-        t.has(id) || t.set(id, el.cloneNode(!0));
-      }
-      for (let el of Array.from(root.querySelectorAll(`[data-block-id]`))) {
-        if (seen.has(el)) continue;
-        seen.add(el);
-        if (el.closest(`table`) && el.getAttribute(`data-block-type`) !== `table`) continue;
-        if (el.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
-        let id = el.getAttribute(`data-block-id`);
-        t.has(id) || t.set(id, el.cloneNode(!0));
-      }
+    // 收集 data-record-id (多维表格记录)
+    for (let el of Array.from(document.querySelectorAll(`[data-record-id]`))) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      if (el.closest(`table`)) continue;
+      // 跳过嵌套 block: 祖先也有 data-block-id 或 data-record-id
+      // 嵌套 block 通过 processContainer 递归处理, 避免双重输出
+      if (el.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
+      let id = el.getAttribute(`data-record-id`);
+      t.has(id) || t.set(id, el.cloneNode(!0));
     }
-    // 先在滚动容器 e 内收集
-    collectFrom(e);
-    // 若收集太少, 说明 e 不含全部正文, fallback 到全局扫描
-    if (t.size < 5) collectFrom(document);
-    // 最终 fallback: 无任何 block 标记时, 收集直接子元素
+    // 收集 data-block-id (普通文档块), 不提前返回
+    for (let el of Array.from(document.querySelectorAll(`[data-block-id]`))) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      if (el.closest(`table`) && el.getAttribute(`data-block-type`) !== `table`) continue;
+      // 跳过嵌套 block: 祖先也有 data-block-id 或 data-record-id
+      // 嵌套 block 通过 processContainer 递归处理, 避免双重输出
+      if (el.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
+      let id = el.getAttribute(`data-block-id`);
+      t.has(id) || t.set(id, el.cloneNode(!0));
+    }
+    // fallback: 无任何 block 标记时, 收集直接子元素
     if (t.size === 0) {
       let children = e.querySelectorAll(`:scope > div, :scope > p, :scope > section`);
       for (let el of Array.from(children)) {
