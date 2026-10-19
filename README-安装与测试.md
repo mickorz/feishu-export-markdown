@@ -48,5 +48,12 @@
    - 修复：在 `rows` 末尾追加 `.filter(row => row.some(cell => cell.children.some(node => node.content && node.content.trim())))`，丢弃所有 cell 均为空的行。
 
 ## 测试
-- `dev-examples/table-fix-example.js`：基于 mock DOM 的单元测试，覆盖以上三个修复点。运行 `node dev-examples/table-fix-example.js`，3/3 通过。
+- `dev-examples/table-fix-example.js`：基于 mock DOM 的单元测试，覆盖以上三个修复点 + 目录块识别 + 去重。运行 `node dev-examples/table-fix-example.js`，5/5 通过。
 - `content.js` 通过 `node --check` 语法检查。
+
+## 目录块与重复内容修复（2026-10-19）
+导出含飞书"目录块"的文档时，目录会被当作 heading 重复输出多份（`# [标题1](#xxx)[标题2](#xxx)...` 一长串），中间还夹杂"本文引用""关系图推荐"等侧边栏内容，段落结构被严重打乱。本次修复涉及 `content.js` 两处：
+
+1. **新增 `isCatalog` 函数 + `L` 分发器跳过目录块**：飞书目录块的特征是块内包含大量 `<a href="#xxx">` 文档内锚点链接，且链接文本占块文本的 80% 以上。`isCatalog` 同时识别 `data-block-type` 为 `catalog`/`toc`/`table_of_contents`/`outline` 的块，以及满足上述启发式条件的块。`L` 函数在 page/grid/空文本分支后追加 `isCatalog(e)?null:`，目录块直接跳过不输出。
+
+2. **`I` 文档构建器去重**：用 `JSON.stringify(parsed)` 作为 key，集合去重，内容完全相同的 block 只保留第一个。解决目录块、侧边栏块因 DOM 嵌套被 `n` 函数多次收集导致的重复输出。

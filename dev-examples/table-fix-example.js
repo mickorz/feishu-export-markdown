@@ -80,13 +80,33 @@ function queryAll(root, selector) {
 }
 function matchSingle(root, selector) {
   const results = [];
-  let m = selector.match(/^\[([\w-]+)(?:="([^"]*)")?\]$/);
+  // [attr^="value"] 属性前缀匹配
+  let m = selector.match(/^\[([\w-]+)\^="([^"]*)"\]$/);
+  if (m) {
+    const [, attr, prefix] = m;
+    walk(root, n => {
+      if (n.nodeType === 1 && n._attrs[attr] !== undefined && n._attrs[attr].startsWith(prefix)) results.push(n);
+    });
+    return results;
+  }
+  // [attr] 或 [attr="value"]
+  m = selector.match(/^\[([\w-]+)(?:="([^"]*)")?\]$/);
   if (m) {
     const [, attr, value] = m;
     walk(root, n => {
       if (n.nodeType === 1 && n._attrs[attr] !== undefined) {
         if (value === undefined || n._attrs[attr] === value) results.push(n);
       }
+    });
+    return results;
+  }
+  // 标签名 a[href^="#"] 这种复合
+  m = selector.match(/^([a-zA-Z]+)\[([\w-]+)\^="([^"]*)"\]$/);
+  if (m) {
+    const [, tag, attr, prefix] = m;
+    const upper = tag.toUpperCase();
+    walk(root, n => {
+      if (n.nodeType === 1 && n.tagName === upper && n._attrs[attr] !== undefined && n._attrs[attr].startsWith(prefix)) results.push(n);
     });
     return results;
   }
@@ -200,6 +220,16 @@ function g(e) {
     rows: n.slice(1).map(e => Array.from(e.querySelectorAll(`td, th`)).map(e => ({ children: a(e) })))
       .filter(e => e.some(e => e.children.some(e => e.content && e.content.trim())))
   };
+}
+function isCatalog(e) {
+  let t = e.getAttribute(`data-block-type`) || ``;
+  if (t === `catalog` || t === `toc` || t === `table_of_contents` || t === `outline`) return !0;
+  let n = e.querySelectorAll(`a[href^="#"], a[data-href^="#"]`);
+  if (n.length < 5) return !1;
+  let r = 0;
+  for (let e of n) r += (e.textContent || ``).length;
+  let i = (e.textContent || ``).replace(/\s/g, ``).length;
+  return i > 0 && r > i * .8;
 }
 
 // ============ 构造模拟飞书表格 DOM ============
@@ -379,8 +409,96 @@ function test3() {
   return false;
 }
 
+// ============ 测试 4: isCatalog 识别目录块 ============
+function test4() {
+  console.log('\n--- 测试 4: isCatalog 识别目录块 ---');
+
+  // 构造目录块: 6 个 <a href="#anchorN">链接, 文本主要是链接
+  const links = [];
+  const titles = ['一、需求概况', '1、需求背景', '2、需求目标', '二、功能详情', '2.0 对局节奏', '2.1 游戏规则'];
+  for (let i = 0; i < titles.length; i++) {
+    const a = new MockNode({
+      tagName: 'a',
+      attrs: { href: '#anchor' + i },
+      children: [new MockNode({ nodeType: 3, textContent: titles[i] })],
+    });
+    a.children[0].parentElement = a;
+    links.push(a);
+  }
+  const catalog = new MockNode({
+    tagName: 'div',
+    attrs: { 'data-block-type': 'heading1' },
+    children: links,
+  });
+  links.forEach(l => (l.parentElement = catalog));
+
+  const result = isCatalog(catalog);
+  console.log(`  isCatalog 返回: ${result}`);
+
+  // 再构造一个正常段落 (只有 2 个链接) - 不应被识别为目录
+  const normalPara = new MockNode({
+    tagName: 'div',
+    attrs: { 'data-block-type': 'text' },
+    children: [
+      new MockNode({ nodeType: 3, textContent: '这是一段正常文字，' }),
+      new MockNode({ tagName: 'a', attrs: { href: '#ref1' }, children: [new MockNode({ nodeType: 3, textContent: '参考链接1' })] }),
+      new MockNode({ nodeType: 3, textContent: '以及' }),
+      new MockNode({ tagName: 'a', attrs: { href: '#ref2' }, children: [new MockNode({ nodeType: 3, textContent: '参考链接2' })] }),
+    ],
+  });
+  normalPara.children.forEach(c => (c.parentElement = normalPara));
+  const result2 = isCatalog(normalPara);
+  console.log(`  正常段落 isCatalog 返回: ${result2} (应为 false)`);
+
+  if (result === true && result2 === false) {
+    console.log('  [通过] 目录块被正确识别, 正常段落不被误判');
+    return true;
+  }
+  console.log(`  [失败] 目录=${result}, 正常段落=${result2}`);
+  return false;
+}
+
+// ============ 测试 5: I 函数去重 ============
+function test5() {
+  console.log('\n--- 测试 5: I 函数去重 ---');
+  // I 函数依赖 L, 这里 mock 一个简化版 L: 把 block 的 textContent 作为 content 返回
+  function Lmock(e) {
+    const text = e.textContent;
+    if (!text) return null;
+    return { type: 'paragraph', children: [{ type: 'text', content: text, marks: [] }] };
+  }
+  // 复制 I 函数的去重逻辑 (用 Lmock 替代 L)
+  function Itest(blocks) {
+    let t = [], n = new Set();
+    for (let r of blocks) {
+      let e = Lmock(r);
+      if (e === null) continue;
+      let i = JSON.stringify(e);
+      if (n.has(i)) continue;
+      n.add(i), t.push(e);
+    }
+    return { type: 'document', title: 'test', children: t };
+  }
+
+  // 3 个 block: 前两个内容相同, 第三个不同
+  const block1 = new MockNode({ tagName: 'div', children: [new MockNode({ nodeType: 3, textContent: '重复内容' })] });
+  const block2 = new MockNode({ tagName: 'div', children: [new MockNode({ nodeType: 3, textContent: '重复内容' })] });
+  const block3 = new MockNode({ tagName: 'div', children: [new MockNode({ nodeType: 3, textContent: '唯一内容' })] });
+
+  const result = Itest([block1, block2, block3]);
+  console.log(`  输入 3 个 block (2 个重复), 输出 ${result.children.length} 个 (期望 2)`);
+  console.log(`  内容: ${JSON.stringify(result.children.map(c => c.children[0].content))}`);
+
+  if (result.children.length === 2) {
+    console.log('  [通过] 重复 block 已被去重');
+    return true;
+  }
+  console.log(`  [失败] 期望 2, 实际 ${result.children.length}`);
+  return false;
+}
+
 // ============ 运行所有测试 ============
-const results = [test1(), test2(), test3()];
+const results = [test1(), test2(), test3(), test4(), test5()];
 const passCount = results.filter(Boolean).length;
 console.log(`\n=== 测试结果: ${passCount}/${results.length} 通过 ===`);
 process.exit(passCount === results.length ? 0 : 1);
