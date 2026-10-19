@@ -263,6 +263,9 @@
       let r = !1;
       for (let e of Array.from(n)) {
         if (e.closest(`table`)) continue;
+        // 跳过嵌套 block: 祖先也有 data-record-id 或 data-block-id
+        // 嵌套 block 通过 processContainer 递归处理, 避免双重输出
+        if (e.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
         let n = e.getAttribute(`data-record-id`);
         t.has(n) || (t.set(n, e.cloneNode(!0)), (r = !0));
       }
@@ -273,6 +276,9 @@
       let r = !1;
       for (let e of Array.from(i)) {
         if (e.closest(`table`) && e.getAttribute(`data-block-type`) !== `table`) continue;
+        // 跳过嵌套 block: 祖先也有 data-block-id 或 data-record-id
+        // 嵌套 block 通过 processContainer 递归处理, 避免双重输出
+        if (e.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
         let n = e.getAttribute(`data-block-id`);
         t.has(n) || (t.set(n, e.cloneNode(!0)), (r = !0));
       }
