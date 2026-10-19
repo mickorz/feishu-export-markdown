@@ -266,15 +266,23 @@
   // 可见子 block(虚拟滚动), 大量内容丢失
   // 改为: 所有 block 独立收集, 用 blockId 去重消除重复
   // 保留: 不提前返回 + DOM 元素去重 + 表格内跳过
+  // 虚拟滚动修复: 若 block 已存在但新克隆内容更多(textContent 更长), 更新克隆
   function n(e, t) {
     let seen = new Set();
+    function upsert(el, id) {
+      if (!t.has(id)) { t.set(id, el.cloneNode(!0)); return; }
+      let old = t.get(id);
+      let oldLen = (old.textContent || ``).length;
+      let newLen = (el.textContent || ``).length;
+      if (newLen > oldLen) t.set(id, el.cloneNode(!0));
+    }
     // 收集 data-record-id (多维表格记录)
     for (let el of Array.from(document.querySelectorAll(`[data-record-id]`))) {
       if (seen.has(el)) continue;
       seen.add(el);
       if (el.closest(`table`)) continue;
       let id = el.getAttribute(`data-record-id`);
-      t.has(id) || t.set(id, el.cloneNode(!0));
+      upsert(el, id);
     }
     // 收集 data-block-id (普通文档块), 不跳过嵌套, 不提前返回
     for (let el of Array.from(document.querySelectorAll(`[data-block-id]`))) {
@@ -282,7 +290,7 @@
       seen.add(el);
       if (el.closest(`table`) && el.getAttribute(`data-block-type`) !== `table`) continue;
       let id = el.getAttribute(`data-block-id`);
-      t.has(id) || t.set(id, el.cloneNode(!0));
+      upsert(el, id);
     }
     // fallback: 无任何 block 标记时, 收集直接子元素
     if (t.size === 0) {
