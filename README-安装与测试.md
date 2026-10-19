@@ -33,3 +33,20 @@
 - 原始 Markdown 下载 ZIP 并保留图片目录；「全部导出」正常生成 Markdown、HTML、Word 和图片文件。
 - 同时选择普通 Markdown + 无图 Markdown 时，分别生成 `<文档名>.md` 和 `<文档名>.no-images.md`。
 - 尚未在真实飞书页面做端到端功能测试。
+
+## 表格错乱修复（2026-10-19）
+导出包含飞书表格的文档时，表格内容会在表格之后被重复输出，且伴随大量空行与零宽空格。本次修复涉及 `content.js` 三个函数：
+
+1. **`n`（块收集器）**：`[data-record-id]` 与 `[data-block-id]` 全文档查询时，会误把表格内部的 `<tr>`/`<td>` 当作顶层块收集，导致 cell 内容被双重输出（一次在表格内，一次作为独立段落）。
+   - 修复：收集时跳过 `e.closest('table')` 命中的元素，保留 `data-block-type="table"` 的表格块本身。
+   - 跳过后若当前分支未收集到任何块，自动回退到下一个分支，避免漏收表格块。
+
+2. **`o`（文本节点收集）**：飞书 DOM 在文本节点中插入了大量零宽空格（`U+200B`-`U+200D`、`U+FEFF`、`U+00A0`），导出后残留为不可见乱码字符。
+   - 修复：在 `TEXT_NODE`、`<a>`、`<code>` 三处文本提取点统一用 `replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')` 清洗。
+
+3. **`g`（表格解析）**：飞书表格 DOM 中存在大量所有 cell 内容均为空的占位 `<tr>`，导出后变成 `|  |  | ... |` 空行，干扰阅读。
+   - 修复：在 `rows` 末尾追加 `.filter(row => row.some(cell => cell.children.some(node => node.content && node.content.trim())))`，丢弃所有 cell 均为空的行。
+
+## 测试
+- `dev-examples/table-fix-example.js`：基于 mock DOM 的单元测试，覆盖以上三个修复点。运行 `node dev-examples/table-fix-example.js`，3/3 通过。
+- `content.js` 通过 `node --check` 语法检查。
