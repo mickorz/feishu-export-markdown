@@ -456,18 +456,28 @@
     let tbl = e.querySelector(`table`),
       t = tbl || e,
       n = Array.from(t.querySelectorAll(`tr`));
-    // 调试日志: 记录表格解析详情
     let bid = e.getAttribute(`data-block-id`) || e.getAttribute(`data-record-id`) || ``;
-    console.log(`[feishu-export] g() table id=${bid} hasTable=${!!tbl} trCount=${n.length} cloneTextLen=${(e.textContent||``).length}`);
     if (n.length === 0) return { type: `table`, headers: [], rows: [] };
     let r = n[0];
+    let allRows = n
+      .slice(1)
+      .map((e) => Array.from(e.querySelectorAll(`td, th`)).map((e) => ({ children: a(e) })));
+    let filtered = allRows.filter((e) => e.some((e) => e.children.some((e) => e.content && e.content.trim())));
+    if (allRows.length !== filtered.length) {
+      console.log(`[feishu-export] g() FILTER id=${bid} allRows=${allRows.length} filtered=${filtered.length} (removed ${allRows.length - filtered.length})`);
+      // 记录被过滤行的 cell children 长度
+      for (let i = 0; i < allRows.length; i++) {
+        if (!filtered.includes(allRows[i])) {
+          let cellLens = allRows[i].map(c => c.children.length);
+          let cellContents = allRows[i].map(c => c.children.map(ch => ch.content || '').join('').substring(0, 20));
+          console.log(`  filtered row ${i}: cellChildren=${JSON.stringify(cellLens)} contents=${JSON.stringify(cellContents)}`);
+        }
+      }
+    }
     return {
       type: `table`,
       headers: Array.from(r.querySelectorAll(`th, td`)).map((e) => ({ children: a(e) })),
-      rows: n
-        .slice(1)
-        .map((e) => Array.from(e.querySelectorAll(`td, th`)).map((e) => ({ children: a(e) })))
-        .filter((e) => e.some((e) => e.children.some((e) => e.content && e.content.trim())))
+      rows: filtered
     };
   }
   function _(e, t) {
