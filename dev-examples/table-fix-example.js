@@ -224,12 +224,26 @@ function g(e) {
 function isCatalog(e) {
   let t = e.getAttribute(`data-block-type`) || ``;
   if (t === `catalog` || t === `toc` || t === `table_of_contents` || t === `outline`) return !0;
-  let n = e.querySelectorAll(`a[href^="#"], a[data-href^="#"]`);
+  let n = Array.from(e.querySelectorAll(`a`));
   if (n.length < 5) return !1;
-  let r = 0;
-  for (let e of n) r += (e.textContent || ``).length;
+  let r = 0, s = 0;
+  for (let a of n) {
+    let h = c(a.getAttribute(`href`) || a.getAttribute(`data-href`) || ``);
+    if (h.startsWith(`#`)) s++;
+    r += (a.textContent || ``).length;
+  }
+  if (s < 5) return !1;
   let i = (e.textContent || ``).replace(/\s/g, ``).length;
   return i > 0 && r > i * .8;
+}
+function isCatalogInline(e) {
+  let t = 0, n = 0;
+  for (let r of e) {
+    if (r.type !== `text`) continue;
+    n += r.content.length;
+    if (r.marks.some(e => e.type === `link`)) t += r.content.length;
+  }
+  return t > 20 && n > 0 && t > n * .8;
 }
 
 // ============ 构造模拟飞书表格 DOM ============
@@ -458,21 +472,26 @@ function test4() {
   return false;
 }
 
-// ============ 测试 5: I 函数去重 ============
+// ============ 测试 5: I 函数去重 + isCatalogInline 过滤目录 heading ============
 function test5() {
-  console.log('\n--- 测试 5: I 函数去重 ---');
-  // I 函数依赖 L, 这里 mock 一个简化版 L: 把 block 的 textContent 作为 content 返回
+  console.log('\n--- 测试 5: I 去重 + isCatalogInline 过滤目录 heading ---');
   function Lmock(e) {
     const text = e.textContent;
     if (!text) return null;
+    // 模拟 heading 解析: 如果块有 data-block-type=heading, 返回 heading
+    const bt = e.getAttribute('data-block-type') || '';
+    if (bt.startsWith('heading')) {
+      return { type: 'heading', level: 1, children: [{ type: 'text', content: text, marks: [{ type: 'link', url: '#a1' }] }] };
+    }
     return { type: 'paragraph', children: [{ type: 'text', content: text, marks: [] }] };
   }
-  // 复制 I 函数的去重逻辑 (用 Lmock 替代 L)
+  // 复制 I 函数的最新逻辑 (含 isCatalogInline 过滤)
   function Itest(blocks) {
-    let t = [], n = new Set();
+    let t = [], n = new Set;
     for (let r of blocks) {
       let e = Lmock(r);
       if (e === null) continue;
+      if (e.type === 'heading' && isCatalogInline(e.children)) continue;
       let i = JSON.stringify(e);
       if (n.has(i)) continue;
       n.add(i), t.push(e);
@@ -480,20 +499,30 @@ function test5() {
     return { type: 'document', title: 'test', children: t };
   }
 
-  // 3 个 block: 前两个内容相同, 第三个不同
-  const block1 = new MockNode({ tagName: 'div', children: [new MockNode({ nodeType: 3, textContent: '重复内容' })] });
-  const block2 = new MockNode({ tagName: 'div', children: [new MockNode({ nodeType: 3, textContent: '重复内容' })] });
-  const block3 = new MockNode({ tagName: 'div', children: [new MockNode({ nodeType: 3, textContent: '唯一内容' })] });
+  // 3 个 block: 1 个目录 heading (link marks), 2 个重复段落
+  const linkText = '标题1标题2标题3标题4标题5标题6标题7标题8';
+  const catalogBlock = new MockNode({
+    tagName: 'div',
+    attrs: { 'data-block-type': 'heading1' },
+    children: [new MockNode({ nodeType: 3, textContent: linkText })],
+  });
+  const para1 = new MockNode({ tagName: 'div', children: [new MockNode({ nodeType: 3, textContent: '普通段落' })] });
+  const para2 = new MockNode({ tagName: 'div', children: [new MockNode({ nodeType: 3, textContent: '普通段落' })] });
 
-  const result = Itest([block1, block2, block3]);
-  console.log(`  输入 3 个 block (2 个重复), 输出 ${result.children.length} 个 (期望 2)`);
-  console.log(`  内容: ${JSON.stringify(result.children.map(c => c.children[0].content))}`);
+  // 验证 isCatalogInline
+  const catalogParsed = Lmock(catalogBlock);
+  console.log(`  isCatalogInline(目录heading) = ${isCatalogInline(catalogParsed.children)} (应 true)`);
+  const paraParsed = Lmock(para1);
+  console.log(`  isCatalogInline(普通段落) = ${isCatalogInline(paraParsed.children)} (应 false)`);
 
-  if (result.children.length === 2) {
-    console.log('  [通过] 重复 block 已被去重');
+  const result = Itest([catalogBlock, para1, para2]);
+  console.log(`  输入 3 个 block (1 目录 + 2 重复段落), 输出 ${result.children.length} 个 (期望 1: 只剩段落)`);
+
+  if (result.children.length === 1 && result.children[0].type === 'paragraph') {
+    console.log('  [通过] 目录 heading 被过滤, 重复段落去重');
     return true;
   }
-  console.log(`  [失败] 期望 2, 实际 ${result.children.length}`);
+  console.log(`  [失败] 期望 1 个段落, 实际 ${JSON.stringify(result.children.map(c => c.type))}`);
   return false;
 }
 
