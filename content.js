@@ -239,7 +239,7 @@
       await i(500));
     let l = Date.now();
     for (; n(o, t), !(o.scrollTop + o.clientHeight >= o.scrollHeight - 10);) {
-      if (Date.now() - l > 6e4) {
+      if (Date.now() - l > 18e4) {
         console.warn(`[feishu-export] Scroll timeout, using collected content`);
         break;
       }
