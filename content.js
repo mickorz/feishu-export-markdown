@@ -263,8 +263,6 @@
       let r = !1;
       for (let e of Array.from(n)) {
         if (e.closest(`table`)) continue;
-        // 跳过嵌套 block: 祖先也有 data-record-id, 避免重复收集
-        if (e.parentElement?.closest(`[data-record-id]`)) continue;
         let n = e.getAttribute(`data-record-id`);
         t.has(n) || (t.set(n, e.cloneNode(!0)), (r = !0));
       }
@@ -275,9 +273,6 @@
       let r = !1;
       for (let e of Array.from(i)) {
         if (e.closest(`table`) && e.getAttribute(`data-block-type`) !== `table`) continue;
-        // 跳过嵌套 block: 祖先也有 data-block-id, 避免重复收集
-        // 嵌套 block 会通过容器递归处理(processContainer)被解析
-        if (e.parentElement?.closest(`[data-block-id]`)) continue;
         let n = e.getAttribute(`data-block-id`);
         t.has(n) || (t.set(n, e.cloneNode(!0)), (r = !0));
       }
@@ -666,15 +661,19 @@
   // 递归处理容器的直接子 block
   // 只处理"直接子 block"(最近祖先容器是 e), 嵌套的更深 block 由直接子 block 递归处理
   // 这样超大容器内的 table/heading/code 等都能被 L 正确识别, 而不是合并成一串文本
+  // 同时查询 data-block-id 和 data-record-id, 覆盖飞书不同的 block 标记方式
   function processContainer(e) {
     let t = [];
-    let n = e.querySelectorAll(`[data-block-id]`);
+    let n = e.querySelectorAll(`[data-block-id], [data-record-id]`);
+    let seen = new Set();
     for (let r of Array.from(n)) {
-      // 判断 r 是否是 e 的直接子 block: 从 r.parentElement 向上找, 遇到 e 之前不能有其他 data-block-id
+      if (seen.has(r)) continue;
+      seen.add(r);
+      // 判断 r 是否是 e 的直接子 block: 从 r.parentElement 向上找, 遇到 e 之前不能有其他 block 标记
       let p = r.parentElement;
       let isDirect = !0;
       while (p && p !== e) {
-        if (p.hasAttribute && p.hasAttribute(`data-block-id`)) {
+        if (p.hasAttribute && (p.hasAttribute(`data-block-id`) || p.hasAttribute(`data-record-id`))) {
           isDirect = !1;
           break;
         }
@@ -695,22 +694,27 @@
       let e = L(r);
       if (e === null) continue;
       if (e.type === `heading` && isCatalogInline(e.children)) continue;
-      // 展开 container: 把容器的 children 提升到文档顶层, 不作为独立 block
-      if (e.type === `container`) {
-        for (let c of e.children) {
-          let k = JSON.stringify(c);
-          if (n.has(k)) continue;
-          n.add(k);
-          t.push(c);
-        }
-        continue;
-      }
-      let i = JSON.stringify(e);
-      if (n.has(i)) continue;
-      n.add(i);
-      t.push(e);
+      // 递归展开 container: 把容器的 children 提升到文档顶层
+      // container 可能嵌套(容器内的容器), 需要递归展开到底
+      let expanded = expandContainer(e, n);
+      t.push(...expanded);
     }
     return { type: `document`, title: R(e), children: t };
+  }
+  // 递归展开 container, 用 Set 去重
+  // n 函数可能同时收集了容器和内部 block, 展开后去重消除重复
+  function expandContainer(e, seen) {
+    if (e.type === `container`) {
+      let result = [];
+      for (let c of e.children) {
+        result.push(...expandContainer(c, seen));
+      }
+      return result;
+    }
+    let k = JSON.stringify(e);
+    if (seen.has(k)) return [];
+    seen.add(k);
+    return [e];
   }
   function L(e) {
     let t = e.getAttribute(`data-block-type`) || ``;

@@ -216,7 +216,6 @@ function n(e, t) {
     let r = !1;
     for (let e of Array.from(n)) {
       if (e.closest(`table`)) continue;
-      if (e.parentElement?.closest(`[data-record-id]`)) continue;
       let n = e.getAttribute(`data-record-id`);
       t.has(n) || (t.set(n, e.cloneNode(!0)), r = !0);
     }
@@ -227,7 +226,6 @@ function n(e, t) {
     let r = !1;
     for (let e of Array.from(i)) {
       if (e.closest(`table`) && e.getAttribute(`data-block-type`) !== `table`) continue;
-      if (e.parentElement?.closest(`[data-block-id]`)) continue;
       let n = e.getAttribute(`data-block-id`);
       t.has(n) || (t.set(n, e.cloneNode(!0)), r = !0);
     }
@@ -556,11 +554,10 @@ function test5() {
   return false;
 }
 
-// ============ 测试 6: n 跳过嵌套 block + processContainer 递归处理 ============
+// ============ 测试 6: processContainer 递归处理 + I 函数去重 ============
 function test6() {
-  console.log('\n--- 测试 6: n 跳过嵌套 block + processContainer 递归处理 ---');
+  console.log('\n--- 测试 6: processContainer 递归处理 + I 函数去重 ---');
 
-  // 构造超大容器: 内含 3 个带 data-block-id 的子 block
   function makeBlock(id, type, text) {
     const b = new MockNode({
       tagName: 'div',
@@ -591,31 +588,34 @@ function test6() {
   });
   bigContainer.parentElement = docContent;
 
-  // 验证 1: n 函数只收集顶层 block, 不收集嵌套 block
+  // 验证 1: n 函数收集所有 block (包括容器和内部子 block)
   global.document = docContent;
   const blocks = new Map();
   n(docContent, blocks);
-  console.log(`  n 收集到 ${blocks.size} 个 block (期望 1: 只收集 big-container)`);
+  console.log(`  n 收集到 ${blocks.size} 个 block (期望 4: 容器+3个子块)`);
   const hasBig = blocks.has('big-container');
-  const hasInner = blocks.has('inner-table') || blocks.has('inner-heading') || blocks.has('inner-para');
-  console.log(`  超大容器被收集: ${hasBig}, 内部子块被收集: ${hasInner} (应为 false)`);
+  const hasInner = blocks.has('inner-table') && blocks.has('inner-heading') && blocks.has('inner-para');
+  console.log(`  容器被收集: ${hasBig}, 子块被收集: ${hasInner}`);
 
   // 验证 2: processContainer 递归处理, 子 block 被正确识别
   function Lmock(e) {
     const bt = e.getAttribute('data-block-type') || '';
     if (bt === 'table') return { type: 'table', headers: [], rows: [] };
     if (bt.startsWith('heading')) return { type: 'heading', level: 1, children: [{ type: 'text', content: e.textContent, marks: [] }] };
-    if (e.querySelectorAll('[data-block-id]').length > 1) return processContainerMock(e);
+    if (e.querySelectorAll('[data-block-id], [data-record-id]').length > 1) return processContainerMock(e);
     return { type: 'paragraph', children: [{ type: 'text', content: e.textContent, marks: [] }] };
   }
   function processContainerMock(e) {
     let t = [];
-    let n = e.querySelectorAll('[data-block-id]');
+    let n = e.querySelectorAll('[data-block-id], [data-record-id]');
+    let seen = new Set();
     for (let r of Array.from(n)) {
+      if (seen.has(r)) continue;
+      seen.add(r);
       let p = r.parentElement;
       let isDirect = !0;
       while (p && p !== e) {
-        if (p.hasAttribute && p.hasAttribute('data-block-id')) { isDirect = !1; break; }
+        if (p.hasAttribute && (p.hasAttribute('data-block-id') || p.hasAttribute('data-record-id'))) { isDirect = !1; break; }
         p = p.parentElement;
       }
       if (!isDirect) continue;
@@ -625,18 +625,41 @@ function test6() {
     }
     return t.length === 0 ? null : { type: 'container', children: t };
   }
-
-  const result = processContainerMock(bigContainer);
-  console.log(`  processContainer 返回: ${result ? result.type : 'null'}`);
-  if (result) {
-    const types = result.children.map(c => c.type);
-    console.log(`  children 类型: ${JSON.stringify(types)} (期望包含 table/heading/paragraph)`);
+  // 递归展开 container + 去重 (模拟 I 函数 + expandContainer)
+  function expandContainerMock(e, seen) {
+    if (e.type === 'container') {
+      let result = [];
+      for (let c of e.children) result.push(...expandContainerMock(c, seen));
+      return result;
+    }
+    let k = JSON.stringify(e);
+    if (seen.has(k)) return [];
+    seen.add(k);
+    return [e];
+  }
+  function Imock(blocksArr) {
+    let t = [], seen = new Set();
+    for (let r of blocksArr) {
+      let e = Lmock(r);
+      if (e === null) continue;
+      t.push(...expandContainerMock(e, seen));
+    }
+    return { type: 'document', title: 'test', children: t };
   }
 
-  if (hasBig && !hasInner && result && result.children.length === 3 &&
+  // 模拟 I 函数: 收集所有 block, L 处理, 展开 container, 去重
+  const blockArr = Array.from(blocks.values());
+  const result = Imock(blockArr);
+  const types = result.children.map(c => c.type);
+  console.log(`  最终文档 children: ${result.children.length} 个`);
+  console.log(`  类型: ${JSON.stringify(types)}`);
+  console.log(`  去重后应只剩 3 个 (table/heading/paragraph), 容器被展开`);
+
+  if (hasBig && hasInner && result.children.length === 3 &&
       result.children.some(c => c.type === 'table') &&
-      result.children.some(c => c.type === 'heading')) {
-    console.log('  [通过] 嵌套 block 被跳过, 容器递归处理, table/heading 被正确识别');
+      result.children.some(c => c.type === 'heading') &&
+      result.children.some(c => c.type === 'paragraph')) {
+    console.log('  [通过] 容器展开+去重, table/heading/paragraph 被正确识别且无重复');
     return true;
   }
   console.log('  [失败]');
