@@ -1,4 +1,7 @@
 (function () {
+  // 记录被 v() 作为 subList 处理的子列表项 blockId
+  // I() 跳过这些 block, 避免双重输出(子列表项既在 subList 里又被独立收集)
+  var subListBlockIds = new Set();
   var e = class {
     constructor(e) {
       ((this.onExport = e),
@@ -466,7 +469,10 @@
       e.classList.contains(`docx-todo-block`)
     );
   }
-  // 解析列表项 (暂时回退到简单版本, 排查内容丢失问题)
+  // 解析列表项, 递归构建子列表, 不再展平成一行
+  // 1. 克隆 e, 移除子列表项 block, 用 a() 收集直接文本
+  // 2. 递归处理直接子列表项 block, 生成 subList
+  // 3. 把子列表项 blockId 记录到 subListBlockIds, I() 跳过独立收集的版本
   function v(e, t) {
     let n = t || e.getAttribute(`data-block-type`) || ``,
       r = `unordered`;
@@ -474,11 +480,41 @@
       ? (r = `ordered`)
       : (n === `todo` || e.classList.contains(`docx-todo-block`)) && (r = `todo`);
     let i = r === `todo` ? y(e) : void 0;
-    return {
-      type: `list`,
-      style: r,
-      items: [{ children: a(e), ...(i === void 0 ? {} : { checked: i }) }]
-    };
+    // 提取直接文本: 克隆后移除子列表项 block, 避免子内容被合并到父项
+    let childListSel = `[data-block-type="bullet"], [data-block-type="ordered"], [data-block-type="todo"], .docx-bullet-block, .docx-ordered-block, .docx-todo-block`;
+    let cloned = e.cloneNode(true);
+    for (let child of cloned.querySelectorAll(childListSel)) {
+      child.remove();
+    }
+    let mainContent = a(cloned);
+    let item = { children: mainContent, ...(i === void 0 ? {} : { checked: i }) };
+    // 递归处理直接子列表项 (从 child.parentElement 向上找, 遇到 e 之前不能有其他列表项)
+    let childListBlocks = Array.from(e.querySelectorAll(childListSel)).filter((child) => {
+      let p = child.parentElement;
+      while (p && p !== e) {
+        let bt = p.getAttribute && p.getAttribute(`data-block-type`);
+        if (bt === `bullet` || bt === `ordered` || bt === `todo`) return false;
+        p = p.parentElement;
+      }
+      return true;
+    });
+    if (childListBlocks.length > 0) {
+      // 合并连续同类型子列表项为一个 list
+      let subList = null;
+      for (let child of childListBlocks) {
+        let childType = child.getAttribute(`data-block-type`) || ``;
+        let childBlockId = child.getAttribute(`data-block-id`) || child.getAttribute(`data-record-id`) || ``;
+        if (childBlockId) subListBlockIds.add(childBlockId);
+        let childList = v(child, childType);
+        if (subList && subList.style === childList.style) {
+          subList.items.push(...childList.items);
+        } else if (!subList) {
+          subList = childList;
+        }
+      }
+      if (subList) item.subList = subList;
+    }
+    return { type: `list`, style: r, items: [item] };
   }
   function y(e) {
     let t = e.querySelector(`input[type="checkbox"]`);
@@ -695,9 +731,13 @@
     return t.length === 0 ? null : { type: `container`, children: t };
   }
   function I(e) {
+    subListBlockIds.clear();
     let t = [],
       n = new Set();
     for (let r of e) {
+      // 跳过已被 v() 作为 subList 处理的子列表项, 避免双重输出
+      let bid = r.getAttribute(`data-block-id`) || r.getAttribute(`data-record-id`) || ``;
+      if (bid && subListBlockIds.has(bid)) continue;
       let e = L(r);
       if (e === null) continue;
       if (e.type === `heading` && isCatalogInline(e.children)) continue;
