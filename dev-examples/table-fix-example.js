@@ -188,6 +188,7 @@ function n(e, t) {
     let r = !1;
     for (let e of Array.from(n)) {
       if (e.closest(`table`)) continue;
+      if (e.getAttribute(`data-block-type`) !== `table` && e.querySelectorAll(`[data-block-id]`).length > 10) continue;
       let n = e.getAttribute(`data-record-id`);
       t.has(n) || (t.set(n, e.cloneNode(!0)), r = !0);
     }
@@ -198,6 +199,7 @@ function n(e, t) {
     let r = !1;
     for (let e of Array.from(i)) {
       if (e.closest(`table`) && e.getAttribute(`data-block-type`) !== `table`) continue;
+      if (e.getAttribute(`data-block-type`) !== `table` && e.querySelectorAll(`[data-block-id]`).length > 10) continue;
       let n = e.getAttribute(`data-block-id`);
       t.has(n) || (t.set(n, e.cloneNode(!0)), r = !0);
     }
@@ -527,7 +529,61 @@ function test5() {
 }
 
 // ============ 运行所有测试 ============
-const results = [test1(), test2(), test3(), test4(), test5()];
+// 测试 6: n 函数跳过超大容器 block
+function test6() {
+  console.log('\n--- 测试 6: n 函数跳过超大容器 block ---');
+  // 构造超大容器: 内含 15 个带 data-block-id 的子 block
+  const children = [];
+  for (let i = 0; i < 15; i++) {
+    children.push(new MockNode({
+      tagName: 'div',
+      attrs: { 'data-block-id': 'inner-' + i, 'data-block-type': 'text' },
+      children: [new MockNode({ nodeType: 3, textContent: '子块' + i })],
+    }));
+  }
+  const bigContainer = new MockNode({
+    tagName: 'div',
+    attrs: { 'data-block-id': 'big-container', 'data-block-type': 'text' },
+    children: children,
+  });
+  children.forEach(c => (c.parentElement = bigContainer));
+
+  // 还需要一个正常的内容 block (不含子 block)
+  const normalBlock = new MockNode({
+    tagName: 'div',
+    attrs: { 'data-block-id': 'normal-1', 'data-block-type': 'text' },
+    children: [new MockNode({ nodeType: 3, textContent: '正常段落' })],
+  });
+
+  const docContent = new MockNode({
+    tagName: 'div',
+    className: 'doc-content',
+    children: [bigContainer, normalBlock],
+  });
+  bigContainer.parentElement = docContent;
+  normalBlock.parentElement = docContent;
+
+  global.document = docContent;
+  const blocks = new Map();
+  n(docContent, blocks);
+
+  console.log(`  收集到 ${blocks.size} 个 block`);
+  const hasBigContainer = blocks.has('big-container');
+  const hasInner = Array.from(blocks.keys()).some(k => k.startsWith('inner-'));
+  const hasNormal = blocks.has('normal-1');
+  console.log(`  超大容器被收集: ${hasBigContainer} (应为 false)`);
+  console.log(`  内部子块被收集: ${hasInner} (应为 true, 子块被独立收集)`);
+  console.log(`  正常段落被收集: ${hasNormal} (应为 true)`);
+
+  if (!hasBigContainer && hasInner && hasNormal) {
+    console.log('  [通过] 超大容器被跳过, 内部子块和正常段落被收集');
+    return true;
+  }
+  console.log('  [失败]');
+  return false;
+}
+
+const results = [test1(), test2(), test3(), test4(), test5(), test6()];
 const passCount = results.filter(Boolean).length;
 console.log(`\n=== 测试结果: ${passCount}/${results.length} 通过 ===`);
 process.exit(passCount === results.length ? 0 : 1);
