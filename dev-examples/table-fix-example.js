@@ -228,26 +228,29 @@ function l(e) {
   }
   return t;
 }
-// 在正文根容器 e 内收集 block, 限定范围避免侧边栏混入
-// 同时收集 data-record-id 和 data-block-id, 不提前返回
+// 收集文档 block: 先在根容器 e 内收集, 不足 5 个则 fallback 到全局
 function n(e, t) {
   let seen = new Set();
-  for (let el of Array.from(e.querySelectorAll(`[data-record-id]`))) {
-    if (seen.has(el)) continue;
-    seen.add(el);
-    if (el.closest(`table`)) continue;
-    if (el.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
-    let id = el.getAttribute(`data-record-id`);
-    t.has(id) || t.set(id, el.cloneNode(!0));
+  function collectFrom(root) {
+    for (let el of Array.from(root.querySelectorAll(`[data-record-id]`))) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      if (el.closest(`table`)) continue;
+      if (el.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
+      let id = el.getAttribute(`data-record-id`);
+      t.has(id) || t.set(id, el.cloneNode(!0));
+    }
+    for (let el of Array.from(root.querySelectorAll(`[data-block-id]`))) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      if (el.closest(`table`) && el.getAttribute(`data-block-type`) !== `table`) continue;
+      if (el.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
+      let id = el.getAttribute(`data-block-id`);
+      t.has(id) || t.set(id, el.cloneNode(!0));
+    }
   }
-  for (let el of Array.from(e.querySelectorAll(`[data-block-id]`))) {
-    if (seen.has(el)) continue;
-    seen.add(el);
-    if (el.closest(`table`) && el.getAttribute(`data-block-type`) !== `table`) continue;
-    if (el.parentElement?.closest(`[data-block-id], [data-record-id]`)) continue;
-    let id = el.getAttribute(`data-block-id`);
-    t.has(id) || t.set(id, el.cloneNode(!0));
-  }
+  collectFrom(e);
+  if (t.size < 5) collectFrom(document);
   if (t.size === 0) {
     let children = e.querySelectorAll(`:scope > div, :scope > p, :scope > section`);
     for (let el of Array.from(children)) {
@@ -710,40 +713,37 @@ function test7() {
 
 // ============ 测试 8: n() 限定正文根容器, 侧边栏不混入 ============
 function test8() {
-  console.log('\n--- 测试 8: n() 限定正文根容器, 侧边栏不混入 ---');
-  // 正文根容器, 内有 block-1
-  const docBlock = new MockNode({
-    tagName: 'div',
-    attrs: { 'data-block-id': 'block-1', 'data-block-type': 'text' },
-    children: [new MockNode({ nodeType: 3, textContent: '正文内容' })],
-  });
-  const docRoot = new MockNode({
-    tagName: 'div',
-    className: 'doc-content-container',
-    children: [docBlock],
-  });
-  docBlock.parentElement = docRoot;
+  console.log('\n--- 测试 8: n() 限定正文根容器, 侧边栏不混入 (足够 block 不触发 fallback) ---');
+  // 正文根容器, 内有 6 个 block (>=5, 不触发 fallback)
+  const docBlocks = [];
+  const docRoot = new MockNode({ tagName: 'div', className: 'doc-content-container', children: [] });
+  for (let i = 0; i < 6; i++) {
+    const b = new MockNode({
+      tagName: 'div',
+      attrs: { 'data-block-id': `block-${i}`, 'data-block-type': 'text' },
+      children: [new MockNode({ nodeType: 3, textContent: `正文内容${i}` })],
+    });
+    b.parentElement = docRoot;
+    docBlocks.push(b);
+    docRoot.children.push(b);
+  }
   // 侧边栏 block (在 docRoot 之外)
   const sidebarBlock = new MockNode({
     tagName: 'div',
     attrs: { 'data-block-id': 'sidebar-1', 'data-block-type': 'text' },
     children: [new MockNode({ nodeType: 3, textContent: '本文引用推荐' })],
   });
-  // 用一个顶层容器模拟 document, 包含 docRoot 和 sidebarBlock
-  const topDocument = new MockNode({
-    tagName: 'div',
-    children: [docRoot, sidebarBlock],
-  });
+  const topDocument = new MockNode({ tagName: 'div', children: [docRoot, sidebarBlock] });
   docRoot.parentElement = topDocument;
   sidebarBlock.parentElement = topDocument;
-  // n(docRoot, map) 只收集 docRoot 内的 block
+  global.document = topDocument;
   const blocks = new Map();
   n(docRoot, blocks);
-  console.log(`  n 收集到 ${blocks.size} 个 block (期望 1: 只有 block-1)`);
-  console.log(`  block-1 被收集: ${blocks.has('block-1')}`);
+  console.log(`  n 收集到 ${blocks.size} 个 block (期望 6: 只含正文, 不含 sidebar)`);
+  console.log(`  block-0 被收集: ${blocks.has('block-0')}`);
   console.log(`  sidebar-1 被收集: ${blocks.has('sidebar-1')} (应为 false)`);
-  if (blocks.size === 1 && blocks.has('block-1') && !blocks.has('sidebar-1')) {
-    console.log('  [通过] n 限定正文根容器, 侧边栏不混入');
+  if (blocks.size === 6 && blocks.has('block-0') && !blocks.has('sidebar-1')) {
+    console.log('  [通过] 足够 block 时不 fallback, 侧边栏不混入');
     return true;
   }
   console.log('  [失败]');
